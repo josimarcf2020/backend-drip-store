@@ -16,7 +16,7 @@ const Category = sequelize.define("category", {
       type: DataTypes.STRING,
       allowNull: false,
     },
-    use_in_meni: {
+    use_in_menu: { // Corrected typo here
       type: DataTypes.BOOLEAN,
       allowNull: true,
       defaultValue: false,

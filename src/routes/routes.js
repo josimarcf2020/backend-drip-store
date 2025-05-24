@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const productController = require('../controllers/product');
+const categoryController = require('../controllers/category');
 const userController = require('../controllers/users');
 
 // Define routes using the Express router
@@ -22,5 +23,12 @@ router.get('/usuarios/:id', userController.getUserById);
 router.put('/usuarios/:id', userController.updateUser);
 router.delete('/usuarios/:id', userController.deleteUser);
 
+//************************* CATEGORIAS ****************************** */
+router.get('/categorias', categoryController.getCategory);
+router.post('/categorias', categoryController.createCategory);
+// Routes that operate on a  specific catgory id
+router.get('/categorias/:id', categoryController.getCategoryById);
+router.put('/categorias/:id', categoryController.updateCategory);
+router.delete('/categorias/:id', categoryController.deleteCategory);
 
-module.exports = router; // Export the configured Express router
+module.exports = router;
