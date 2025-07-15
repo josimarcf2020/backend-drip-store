@@ -1,5 +1,4 @@
 const { DataTypes } = require("sequelize");
-const product = require("./product");
 const sequelize = require("../config/database");
 
 //Definindo modelo category
@@ -11,13 +10,13 @@ const Product_image = sequelize.define("product_image", {
     },
     product_id: {
       type: DataTypes.INTEGER,
-      foreign_key: true,
       references: {
-        model: product,
+        model: "products", // Use table name as a string to avoid circular dependency
         key: "id",
+        alias: "productImages", // Alias for the association
       },
-      allowNull: true,
-      defaultValue: -1,
+      allowNull: false, // Uma imagem de produto deve sempre estar associada a um produto.
+      // defaultValue: -1 removido, pois product_id não pode ser nulo.
     },
     enable: {
       type: DataTypes.BOOLEAN,

@@ -1,10 +1,43 @@
-const Product = require('../api/models/product'); // Importa o modelo Sequelize Product
+const Product = require('../api/models/product');
+const Category = require('../api/models/category');
+const ProductImage = require('../api/models/product_image');
+const ProductOptions = require('../api/models/Product_options');
+const sequelize = require('../api/config/database'); // Importa a instância do Sequelize para usar transações
+
+/**
+ * NOTA IMPORTANTE:
+ * Para que a inclusão de dados ('include') e os campos virtuais funcionem corretamente,
+ * as associações no modelo 'product.js' devem ser definidas com um alias ('as').
+ * Exemplo em /models/product.js:
+ *
+ * Product.hasMany(ProductImage, { as: 'images', foreignKey: 'product_id' });
+ * Product.hasMany(ProductOptions, { as: 'options', foreignKey: 'product_id' });
+ * Product.belongsToMany(Category, { as: 'categories', through: 'category_products', ... });
+ */
+
+// Helper para reutilizar a configuração de 'include'
+const getProductIncludes = () => [
+    {
+        model: Category,
+        as: 'categories',
+        through: { attributes: [] } // Oculta os atributos da tabela de junção
+    },
+    {
+        model: ProductImage,
+        as: 'productImages' // Match the alias in the Product model to avoid naming collisions.
+    },
+    {
+        model: ProductOptions,
+        as: 'productOptions' // Match the alias in the Product model.
+    }
+];
 
 // Listar todos os produtos
 const getProducts = async (req, res) => {
     try {
         const products = await Product.findAll({
-            order: [['id', 'DESC']] // Ordena por ID de forma descendente
+            include: getProductIncludes(),
+            order: [['id', 'DESC']]
         });
         res.status(200).json(products);
     } catch (error) {
@@ -17,7 +50,9 @@ const getProducts = async (req, res) => {
 const getProductById = async (req, res) => {
     const { id } = req.params;
     try {
-        const product = await Product.findByPk(id); // Busca pela chave primária
+        const product = await Product.findByPk(id, {
+            include: getProductIncludes()
+        });
         if (!product) {
             return res.status(404).json({ message: 'Produto não encontrado' });
         }
@@ -30,31 +65,53 @@ const getProductById = async (req, res) => {
 
 // Criar um novo produto
 const createProduct = async (req, res) => {
-    // Extrai todos os campos relevantes do corpo da requisição
-    const { name, slug, enabled, use_in_menu, stock, description, price, price_with_discount } = req.body;
+    // O corpo da requisição agora pode incluir os dados das associações
+    const { name, slug, enabled, use_in_menu, stock, description, price, price_with_discount, categoryIds, images, options } = req.body;
+    const t = await sequelize.transaction();
 
     try {
-        // Validação básica de campos obrigatórios (exemplo)
         if (!name || !slug) {
             return res.status(400).json({ message: 'Nome e slug são obrigatórios.' });
         }
 
+        // 1. Cria o produto dentro da transação
         const newProduct = await Product.create({
-            name,
-            slug,
-            enabled,
-            use_in_menu,
-            stock,
-            description,
-            price,
-            price_with_discount
+            name, slug, enabled, use_in_menu, stock, description, price, price_with_discount
+        }, { transaction: t });
+
+        // 2. Associa as categorias (Muitos-para-Muitos)
+        if (categoryIds && categoryIds.length > 0) {
+            await newProduct.setCategories(categoryIds, { transaction: t });
+        }
+
+        // 3. Cria e associa as imagens (Um-para-Muitos)
+        if (images && images.length > 0) {
+            const imagesToCreate = images.map(img => ({ ...img, product_id: newProduct.id }));
+            await ProductImage.bulkCreate(imagesToCreate, { transaction: t });
+        }
+
+        // 4. Cria e associa as opções (Um-para-Muitos)
+        if (options && options.length > 0) {
+            const optionsToCreate = options.map(opt => ({ ...opt, product_id: newProduct.id }));
+            await ProductOptions.bulkCreate(optionsToCreate, { transaction: t });
+        }
+
+        // Se tudo deu certo, confirma a transação
+        await t.commit();
+
+        // Busca o produto completo com todas as associações para retornar na resposta
+        const finalProduct = await Product.findByPk(newProduct.id, {
+            include: getProductIncludes()
         });
-        res.status(201).json({ message: 'Produto criado com sucesso!', product: newProduct });
+
+        res.status(201).json({ message: 'Produto criado com sucesso!', product: finalProduct });
+
     } catch (error) {
+        // Se ocorrer qualquer erro, desfaz a transação
+        await t.rollback();
         console.error('Erro ao criar produto:', error);
-        // Trata erros de validação do Sequelize
         if (error.name === 'SequelizeValidationError' || error.name === 'SequelizeUniqueConstraintError') {
-            return res.status(400).json({ message: 'Erro de validação', errors: error.errors.map(e => e.message) });
+            return res.status(400).json({ message: 'Erro de validação', errors: error.errors.map(e => ({ field: e.path, message: e.message })) });
         }
         res.status(500).json({ message: 'Erro ao criar produto', error: error.message });
     }
@@ -63,34 +120,64 @@ const createProduct = async (req, res) => {
 // Atualizar um produto existente
 const updateProduct = async (req, res) => {
     const { id } = req.params;
-    const updateData = req.body;
+    // Separa os dados do produto dos dados das associações
+    const { categoryIds, images, options, ...productData } = req.body;
+    const t = await sequelize.transaction();
 
     try {
-        const product = await Product.findByPk(id);
+        // Valida se algum dado foi enviado para atualização
+        if (Object.keys(req.body).length === 0) {
+            await t.rollback();
+            return res.status(400).json({ message: 'Nenhum dado fornecido para atualização.' });
+        }
+
+        const product = await Product.findByPk(id, { transaction: t });
         if (!product) {
+            await t.rollback();
             return res.status(404).json({ message: 'Produto não encontrado' });
         }
 
-        // O método update retorna um array com o número de linhas afetadas
-        const [updatedRowsCount] = await Product.update(updateData, {
-            where: { id }
+        // 1. Atualiza os atributos do próprio produto
+        if (Object.keys(productData).length > 0) {
+            await product.update(productData, { transaction: t });
+        }
+
+        // 2. Atualiza as categorias (substitui todas as existentes)
+        if (categoryIds) { // Permite passar um array vazio para remover todas as categorias
+            await product.setCategories(categoryIds, { transaction: t });
+        }
+
+        // 3. Atualiza as imagens (destrutivo: remove todas as antigas e adiciona as novas)
+        if (images) {
+            await ProductImage.destroy({ where: { product_id: id }, transaction: t });
+            if (images.length > 0) {
+                const imagesToCreate = images.map(img => ({ ...img, product_id: id }));
+                await ProductImage.bulkCreate(imagesToCreate, { transaction: t });
+            }
+        }
+
+        // 4. Atualiza as opções (mesma lógica das imagens)
+        if (options) {
+            await ProductOptions.destroy({ where: { product_id: id }, transaction: t });
+            if (options.length > 0) {
+                const optionsToCreate = options.map(opt => ({ ...opt, product_id: id }));
+                await ProductOptions.bulkCreate(optionsToCreate, { transaction: t });
+            }
+        }
+
+        await t.commit();
+
+        const updatedProduct = await Product.findByPk(id, {
+            include: getProductIncludes()
         });
 
-        // Se nenhuma linha foi atualizada, mas dados foram enviados, pode ser que os dados eram os mesmos
-        // ou o produto foi deletado concorrentemente.
-        if (updatedRowsCount === 0 && Object.keys(updateData).length > 0) {
-            const currentProduct = await Product.findByPk(id); // Re-verifica se o produto ainda existe
-            if (!currentProduct) return res.status(404).json({ message: 'Produto não encontrado após tentativa de atualização.' });
-            return res.status(200).json({ message: 'Nenhuma alteração aplicada ao produto (dados podem ser os mesmos).', product: currentProduct });
-        }
-        
-        const updatedProduct = await Product.findByPk(id); // Busca o produto atualizado para retornar
         res.status(200).json({ message: 'Produto atualizado com sucesso!', product: updatedProduct });
 
     } catch (error) {
+        await t.rollback();
         console.error(`Erro ao atualizar produto com id ${id}:`, error);
         if (error.name === 'SequelizeValidationError' || error.name === 'SequelizeUniqueConstraintError') {
-            return res.status(400).json({ message: 'Erro de validação ao atualizar', errors: error.errors.map(e => e.message) });
+            return res.status(400).json({ message: 'Erro de validação ao atualizar', errors: error.errors.map(e => ({ field: e.path, message: e.message })) });
         }
         res.status(500).json({ message: 'Erro ao atualizar produto', error: error.message });
     }
@@ -100,13 +187,17 @@ const updateProduct = async (req, res) => {
 const deleteProduct = async (req, res) => {
     const { id } = req.params;
     try {
-        const deletedRowCount = await Product.destroy({
-            where: { id }
-        });
-        if (deletedRowCount === 0) {
+        // Para que as imagens e opções sejam deletadas em cascata,
+        // a melhor abordagem é configurar 'ON DELETE CASCADE' na foreign key no banco de dados.
+        const product = await Product.findByPk(id);
+        if (!product) {
             return res.status(404).json({ message: 'Produto não encontrado para deletar' });
         }
-        res.status(200).json({ message: 'Produto deletado com sucesso!' }); // Pode usar 204 No Content se preferir não enviar corpo
+        
+        await product.destroy(); // O Sequelize cuidará de remover as entradas na tabela de junção 'category_products'
+
+        // HTTP 204 No Content é o status apropriado para uma exclusão bem-sucedida sem corpo de resposta.
+        res.status(204).send();
     } catch (error) {
         console.error(`Erro ao deletar produto com id ${id}:`, error);
         res.status(500).json({ message: 'Erro ao deletar produto', error: error.message });
