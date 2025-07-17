@@ -1,11 +1,17 @@
 require('dotenv').config(); // Moved to the top
 const express = require('express');
-const sequelize = require('./config/database'); // Corrected path
+const sequelize = require('./src/api/config/database'); // Corrected path
 const privateRoutes = require('./src/routes/privateRoutes.js');
 const userRoutes = require('./src/routes/userRoutes'); 
+const cors = require('cors');
 const app = express();
 const port = process.env.PORT || 3000;
 const host = process.env.HOST || 'localhost';
+
+// Use the cors middleware
+app.use(cors({
+  origin: 'http://localhost:5173' // Or '*' for any origin
+}));
 
 app.use(express.json());
 

@@ -1,4 +1,5 @@
 const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
 const Users = require('../api/models/users');
 
 const getUsers = async (req, res) => {
@@ -92,8 +93,7 @@ const updateUser = async (req, res) => {
         }
 
         const [updatedRowsCount] = await Users.update(updatePayload, {
-            where: { id },
-            individualHooks: true // Ensures hooks (if any) are run
+            where: { id }
         });
 
         if (updatedRowsCount === 0) {
@@ -135,10 +135,34 @@ const deleteUser = async (req, res) => {
     }
 };
 
+const loginUser = async (req, res) => {
+
+    const { email, password } = req.body;
+
+    try {
+        const user = await Users.findOne({ where: { email } });
+        if (!user) {
+            return res.status(401).json({ message: 'Credenciais inválidas' });
+        }
+
+        const isPasswordValid = await bcrypt.compare(password, user.password);
+        if (!isPasswordValid) {
+            return res.status(401).json({ message: 'Credenciais inválidas' });
+        }
+
+        const token = jwt.sign({ id: user.id }, process.env.APP_KEY, { expiresIn: '1h' });
+        res.status(200).json({ message: 'Login bem-sucedido', token });
+    } catch (error) {
+        console.error('Erro ao fazer login:', error.message);
+        res.status(500).json({ message: 'Erro interno ao fazer login', error: error.message });
+    }
+};
+
 module.exports = {
     getUsers,
     getUserById,
     createUser,
     updateUser,
-    deleteUser
+    deleteUser,
+    loginUser
 };

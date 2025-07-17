@@ -1,9 +1,11 @@
-const express                   = require('express');
-const router                    = express.Router();
-const productController         = require('../controllers/product');
-const categoryController        = require('../controllers/category');
-const userController            = require('../controllers/users');
-const productImageController    = require('../controllers/product_image'); // Renomeado para consistência
+const express                = require('express');
+const router                 = express.Router();
+const productController      = require('../controllers/product');
+const categoryController     = require('../controllers/category');
+const userController         = require('../controllers/users');
+const productImageController = require('../controllers/product_image'); // Renomeado para consistência
+const bcrypt                 = require('bcrypt');
+const jwt                    = require('jsonwebtoken');
 
 // Define routes using the Express router
 // These routes will be relative to where this router is mounted.
@@ -17,6 +19,7 @@ router.put('/v1/product/:id', productController.updateProduct);
 router.delete('/v1/product/:id', productController.deleteProduct);
 
 // ************************* USUARIOS *******************************
+router.post('/v1/user/login', userController.loginUser);
 router.get('/v1/user/search', userController.getUsers);
 router.post('/v1/user/', userController.createUser);
 // Routes that operate on a specific user by ID
